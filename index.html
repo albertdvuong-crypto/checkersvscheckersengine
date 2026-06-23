@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Ironclad Checkers: AI vs AI (Anti-Blunder Pro)</title>
+    <link rel="stylesheet" href="style.css">
+    <script type="module" src="app.js" defer></script>
+</head>
+<body>
+    <div id="status">AI VS AI</div>
+
+    <div class="game-container" style="display: flex; gap: 20px;">
+        
+        <div class="eval-bar-wrapper" style="width: 25px; height: 500px; background-color: #0400ff; position: relative; border-radius: 4px; overflow: hidden; border: 1px solid #555;">
+            <div id="eval-fill" style="width: 100%; height: 50%; background-color: #ff0000; position: absolute; bottom: 0; transition: height 0.4s ease;"></div>
+        </div>
+
+        <div id="board"></div>
+        
+        <div class="sidebar">
+            <div class="stats">
+                <div class="stat-line"><span>Depth:</span> <span id="depth-val">--</span></div>
+                <div class="stat-line"><span>Score:</span> <span id="score-val">0.00</span></div>
+            </div>
+            <div id="log" style="height: 300px; overflow-y: auto; margin-top: 10px; border: 1px solid #444; padding: 5px;">Engine initialized...<br></div>
+        </div>
+    </div>
+</body>
+</html>
