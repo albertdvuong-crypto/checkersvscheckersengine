@@ -2,7 +2,11 @@ import { zobristTable, zobristTurn } from './constants.js';
 
 let tt = new Map();
 
-// Set this to true once you connect a WebAssembly or Node.js EGDB reader
+// FIXED: Added Transposition Table Flags
+const FLAG_EXACT = 0;
+const FLAG_ALPHA = 1;
+const FLAG_BETA = 2;
+
 const EGDB_AVAILABLE = false; 
 
 export let abortSearch = false;
@@ -98,34 +102,36 @@ export function evaluate(b) {
             if(p === 1) { 
                 redPawns++;
                 redPieces.push({r, c, type: 1});
-                redPos += Math.pow((7 - r), 2) * 2; 
-                if(isCenter) redPos += 15;
-                if(isEdge) redPos -= 10;
+                // FIXED: Flattened the honeypot math to a safe linear multiplier
+                redPos += (((7 - r) * (7 - r)) / 2) >> 1; 
+                if(isCenter) redPos += 5;
+                if(isEdge) redPos -= 5;
             } else if(p === 3) { 
                 redKings++;
                 redPieces.push({r, c, type: 3});
-                if(isCenter) redPos += 20;
-                if(isEdge) redPos -= 15;
+                if(isCenter) redPos += 10;
+                if(isEdge) redPos -= 5;
             } else if(p === 2) { 
                 bluePawns++;
                 bluePieces.push({r, c, type: 2});
-                bluePos += Math.pow(r, 2) * 2;
-                if(isCenter) bluePos += 15;
-                if(isEdge) bluePos -= 10;
+                bluePos += ((r * r) / 2) >> 1;
+                if(isCenter) bluePos += 5;
+                if(isEdge) bluePos -= 5;
             } else if(p === 4) { 
                 blueKings++;
                 bluePieces.push({r, c, type: 4});
-                if(isCenter) bluePos += 20;
-                if(isEdge) bluePos -= 15;
+                if(isCenter) bluePos += 10;
+                if(isEdge) bluePos -= 5;
             }
         }
     }
 
     let totalPieces = redPawns + redKings + bluePawns + blueKings;
     
-    let kingVal = 175;
-    if(totalPieces <= 8) kingVal = 210;
-    if(totalPieces <= 4) kingVal = 260; 
+    let kingVal = 135;
+    if(totalPieces <= 8) kingVal = 175;
+    if(totalPieces <= 6) kingVal = 185;
+    if(totalPieces <= 4) kingVal = 195; 
 
     let redMat = (redPawns * 100) + (redKings * kingVal);
     let blueMat = (bluePawns * 100) + (blueKings * kingVal);
@@ -179,7 +185,22 @@ export function alphaBeta(b, depth, alpha, beta, maximizing, player, activePiece
     if (abortSearch) return 0;
 
     let hash = getHash(b, player);
-    if (!activePiece && tt.has(hash) && tt.get(hash).depth >= depth) return tt.get(hash).val;
+
+    // FIXED: Internal Repetition Draw Prevention
+    // If this position exists in the current search path, score it as a Draw (0)
+    if (gameHistory.includes(hash)) {
+        return 0;
+    }
+
+    // FIXED: Safely query the TT using verified alpha/beta boundaries
+    if (!activePiece && tt.has(hash)) {
+        let entry = tt.get(hash);
+        if (entry.depth >= depth) {
+            if (entry.flag === FLAG_EXACT) return entry.val;
+            if (entry.flag === FLAG_ALPHA && entry.val <= alpha) return alpha;
+            if (entry.flag === FLAG_BETA && entry.val >= beta) return beta;
+        }
+    }
     
     if (EGDB_AVAILABLE && !activePiece && countTotalPieces(b) <= 6) {
         let tbScore = probeTablebase(b);
@@ -194,13 +215,13 @@ export function alphaBeta(b, depth, alpha, beta, maximizing, player, activePiece
 
     let {moves} = getMoves(b, player, activePiece);
     if (moves.length === 0) {
-        // FIXED: The "False Defeat" score trap. If a chain ends, simply hand the turn over!
         if (activePiece) {
             return alphaBeta(b, depth - 1, alpha, beta, !maximizing, player === 1 ? 2 : 1, null, gameHistory);
         }
         return maximizing ? (-100000 + 2 * (10 - depth)) : (100000 - 2 * (10 - depth));
     }
 
+    let originalAlpha = alpha;
     let bestVal = maximizing ? -Infinity : Infinity;
     
     moves.sort((a, b) => (b.capture ? 1 : 0) - (a.capture ? 1 : 0));
@@ -208,14 +229,19 @@ export function alphaBeta(b, depth, alpha, beta, maximizing, player, activePiece
     for(let m of moves) {
         let nextB = makeMove(b, m);
         
-        // FIXED: The King Trampoline Rule Violation
         let movingPiece = b[m.from[0]][m.from[1]];
         let isPromotion = (movingPiece === 1 && m.to[0] === 0) || (movingPiece === 2 && m.to[0] === 7);
         let continues = m.capture && !isPromotion && getMoves(nextB, player, m.to).isJump;
         
+        // Push the board hash to history to track internal repetitions
+        gameHistory.push(hash);
+
         let val = continues 
             ? alphaBeta(nextB, depth, alpha, beta, maximizing, player, m.to, gameHistory)
             : alphaBeta(nextB, depth - 1, alpha, beta, !maximizing, player === 1 ? 2 : 1, null, gameHistory);
+
+        // Pop it off when stepping back up the tree
+        gameHistory.pop();
 
         if (abortSearch) return 0;
 
@@ -228,7 +254,14 @@ export function alphaBeta(b, depth, alpha, beta, maximizing, player, activePiece
         }
         if (beta <= alpha) break; 
     }
-    if (!activePiece && !abortSearch) tt.set(hash, {val: bestVal, depth: depth});
+
+    // FIXED: Save entries with precise flags so they don't corrupt future searches
+    if (!activePiece && !abortSearch) {
+        let flag = FLAG_EXACT;
+        if (bestVal <= originalAlpha) flag = FLAG_ALPHA;
+        else if (bestVal >= beta) flag = FLAG_BETA;
+        tt.set(hash, {val: bestVal, depth: depth, flag: flag});
+    }
     return bestVal;
 }
 
@@ -246,14 +279,12 @@ function quiescence(b, alpha, beta, maximizing, player, activePiece = null) {
     }
     
     let {moves, isJump} = getMoves(b, player, activePiece);
-    // FIXED: The Quiescence Score Leak. Ensure the score returns safely when a chain ends.
     if (activePiece && !isJump) return standPat; 
     if (!isJump && !activePiece) return standPat; 
     
     for (let m of moves) {
         let nextB = makeMove(b, m);
         
-        // FIXED: The King Trampoline inside captures
         let movingPiece = b[m.from[0]][m.from[1]];
         let isPromotion = (movingPiece === 1 && m.to[0] === 0) || (movingPiece === 2 && m.to[0] === 7);
         let continues = m.capture && !isPromotion && getMoves(nextB, player, m.to).isJump;
